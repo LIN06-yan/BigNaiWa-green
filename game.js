@@ -16,7 +16,9 @@
 
   const W = 420;             // 逻辑宽度
   const H = 700;             // 逻辑高度
-  const WALL = 18;           // 内框边距：圆角外框内缩出的直角实线方框，也是真实物理边界
+  const WALL = 18;           // 内框边距：直角实线方框的外沿
+  const INNER = WALL + 3;    // 绿色实线的内沿（线宽 3px）：物理墙和绘制裁剪都用它，
+                             // 人物只能贴着线的内侧堆放，绝不压线、不越线
   const DROP_Y = 74;         // 待投放水果的高度
   const DANGER_Y = 142;      // 警戒线
 
@@ -319,23 +321,16 @@
     /* --- 约束求解 --- */
     for (let it = 0; it < ITER; it++) {
 
-      /* 墙 & 地面：每个子圆各自贴墙，推力累加到刚体中心上（一次到位） */
+      /* 墙 & 地面：用完整贴图的最大半径 r 限制中心。
+         人物之间仍按抠图子圆碰撞；但人形不是圆形，若墙也只用子圆，
+         旋转后头发、手脚等边缘可能探出内框。r 能覆盖任意旋转后的整张贴图。 */
       for (let i = 0; i < balls.length; i++) {
         const b = balls[i];
         if (b.dead) continue;
-        let pushL = 0, pushR = 0, pushFloor = 0, pushCeil = 0;
-        const n = b.parts.length;
-        for (let k = 0; k < n; k++) {
-          const x = b.wx[k], y = b.wy[k], rr = b.ws[k];
-          const l = WALL - (x - rr);
-          if (l > pushL) pushL = l;
-          const rgt = (x + rr) - (W - WALL);
-          if (rgt > pushR) pushR = rgt;
-          const dn = (y + rr) - (H - WALL);
-          if (dn > pushFloor) pushFloor = dn;
-          const up = WALL - (y - rr);
-          if (up > pushCeil) pushCeil = up;
-        }
+        const pushL = Math.max(0, INNER + b.r - b.x);
+        const pushR = Math.max(0, b.x + b.r - (W - INNER));
+        const pushFloor = Math.max(0, b.y + b.r - (H - INNER));
+        const pushCeil = Math.max(0, INNER + b.r - b.y);
         if (pushL || pushR || pushFloor || pushCeil) {
           b.x += pushL - pushR;
           b.y += pushCeil - pushFloor;
@@ -418,18 +413,14 @@
       }
     }
 
-    /* --- 收尾墙约束：球球分离可能把水果顶出墙外，最后再夹一次 --- */
+    /* --- 收尾墙约束：球球分离可能把人物顶出墙外，最后再按完整贴图半径夹一次 --- */
     for (let i = 0; i < balls.length; i++) {
       const b = balls[i];
       if (b.dead) continue;
-      let pushL = 0, pushR = 0, pushFloor = 0, pushCeil = 0;
-      for (let k = 0; k < b.parts.length; k++) {
-        const x = b.wx[k], y = b.wy[k], rr = b.ws[k];
-        const l = WALL - (x - rr);         if (l > pushL) pushL = l;
-        const rgt = (x + rr) - (W - WALL); if (rgt > pushR) pushR = rgt;
-        const dn = (y + rr) - (H - WALL);  if (dn > pushFloor) pushFloor = dn;
-        const up = WALL - (y - rr);        if (up > pushCeil) pushCeil = up;
-      }
+      const pushL = Math.max(0, INNER + b.r - b.x);
+      const pushR = Math.max(0, b.x + b.r - (W - INNER));
+      const pushFloor = Math.max(0, b.y + b.r - (H - INNER));
+      const pushCeil = Math.max(0, INNER + b.r - b.y);
       if (pushL || pushR || pushFloor || pushCeil) {
         b.x += pushL - pushR;
         b.y += pushCeil - pushFloor;
@@ -545,9 +536,9 @@
       } else {
         const nt = tier + 1;
         const nb = makeBall(mx, my, nt, (a.vx + b.vx) * 0.5, (a.vy + b.vy) * 0.5 - 60);
-        /* 贴着内框合成时，新人物更大；按完整碰撞包围半径夹回框内，避免瞬间越界 */
-        nb.x = clamp(nb.x, WALL + nb.rb, W - WALL - nb.rb);
-        nb.y = clamp(nb.y, WALL + nb.rb, H - WALL - nb.rb);
+        /* 贴着内框合成时，新人物更大；按完整贴图半径夹回框内，任意旋转都不越界 */
+        nb.x = clamp(nb.x, INNER + nb.r, W - INNER - nb.r);
+        nb.y = clamp(nb.y, INNER + nb.r, H - INNER - nb.r);
         nb.px = nb.x;
         nb.py = nb.y;
         nb.landed = true;
@@ -653,7 +644,7 @@
 
   function aimLimit(tier) {
     const r = FRUITS[tier].r * shapeOf(tier).rb;   // 用碰撞外形而不是圆形
-    return [WALL + r + 0.5, W - WALL - r - 0.5];
+    return [INNER + r + 0.5, W - INNER - r - 0.5];
   }
 
   function moveAim(x) {
@@ -928,7 +919,7 @@
      * 这样即使贴图旋转、合成弹跳或挤压变形，也不会出现视觉上越线。 */
   function clipPlayArea() {
     ctx.beginPath();
-    ctx.rect(WALL, WALL, W - WALL * 2, H - WALL * 2);
+    ctx.rect(INNER, INNER, W - INNER * 2, H - INNER * 2);
     ctx.clip();
   }
 
@@ -968,8 +959,8 @@
       ? 'rgba(255,72,72,' + (0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 140))) + ')'
       : 'rgba(120,170,130,.42)';
     ctx.beginPath();
-    ctx.moveTo(WALL, DANGER_Y);
-    ctx.lineTo(W - WALL, DANGER_Y);
+    ctx.moveTo(INNER, DANGER_Y);
+    ctx.lineTo(W - INNER, DANGER_Y);
     ctx.stroke();
     ctx.restore();
   }
@@ -988,7 +979,7 @@
       ctx.globalAlpha = 0.16;
       ctx.fillStyle = '#7a4a1e';
       ctx.beginPath();
-      ctx.ellipse(b.x, H - WALL - 1, b.r * 0.86, Math.max(3, b.r * 0.17), 0, 0, Math.PI * 2);
+      ctx.ellipse(b.x, H - INNER - 1, b.r * 0.86, Math.max(3, b.r * 0.17), 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
 
@@ -998,8 +989,14 @@
         if (t < 1) scale = 1 + 0.28 * (1 - t);
         else b.popAt = 0;
       }
-      const shape = b.sq > 0.004 ? { a: b.sqA, k: b.sq } : null;
-      drawFruit(ctx, b.x, b.y, b.r, b.tier, b.angle, scale, shape);
+      /* 合成弹出的放大不能把人送出内框：按当前位置剩余空间限制缩放。
+         人形贴图不再做挤压变形，避免压扁/拉伸时局部越过边线或被裁剪。 */
+      const room = Math.min(
+        b.x - INNER, W - INNER - b.x,
+        b.y - INNER, H - INNER - b.y
+      );
+      scale = Math.min(scale, Math.max(0.05, room / b.r));
+      drawFruit(ctx, b.x, b.y, b.r, b.tier, b.angle, scale, null);
     }
   }
 
@@ -1020,7 +1017,7 @@
       ctx.strokeStyle = 'rgba(70,140,95,.45)';
       ctx.beginPath();
       ctx.moveTo(x, DROP_Y + r + 4);
-      ctx.lineTo(x, H - WALL);
+      ctx.lineTo(x, H - INNER);
       ctx.stroke();
       ctx.restore();
 
@@ -1086,11 +1083,13 @@
       const k = bm.t / bm.life;
       if (k >= 1 || !boomImg) { state.booms.splice(i, 1); continue; }
       const sc = 0.5 + k * 0.9;
-      const box = 300 * sc;
+      /* 照片11也完整留在直角内框里：限制最大尺寸并夹住中心，不做旋转，避免四角越线。 */
+      const box = Math.min(300 * sc, W - INNER * 2, H - INNER * 2);
+      const bx = clamp(bm.x, INNER + box / 2, W - INNER - box / 2);
+      const by = clamp(bm.y - k * 26, INNER + box / 2, H - INNER - box / 2);
       ctx.save();
       ctx.globalAlpha = Math.max(0, 1 - k);
-      ctx.translate(bm.x, bm.y - k * 26);              // 往上飘一点
-      ctx.rotate(Math.sin(bm.t * 7) * 0.07);           // 轻微摇摆
+      ctx.translate(bx, by);
       ctx.drawImage(boomImg, -box / 2, -box / 2, box, box);
       ctx.restore();
     }
@@ -1104,7 +1103,7 @@
     /* 棋盘右上角永远显示「下一个」——当前那颗在准星位置上画着，别搞混 */
     const tier = state.next;
     const r = 15;
-    const x = W - WALL - 30;
+    const x = W - INNER - 30;
     const y = 32;
 
     ctx.save();
@@ -1426,7 +1425,7 @@
   /* 调试句柄（控制台可用）：__DNW__.state / .reset() / .drop() / .FRUITS / .render() */
   window.__DNW__ = { state, reset, revive, settle, gameOver, tryDrop, stepPhysics, update, FRUITS,
                      render, resizeCanvas, shapeOf, makeBall, paintRevives, addScore,
-                     MAX_BONUS, REVIVE_STEP,
+                     MAX_BONUS, REVIVE_STEP, W, H, INNER,
                      sound: function () { Sound.ensure(); },
                      boomReady: () => !!boomImg,
                      blurReady: () => !!blurImg };
